@@ -160,10 +160,6 @@ cython_debug/
 #.idea/
 
 # Project specific
-final.mov
-video_no_text.mp4
-voice.mp3
-subtitles.srt
-JSON_copy_paste.txt
-minecraft.mp4
-subway.mp4
+background_videos/
+intermediates/
+result/

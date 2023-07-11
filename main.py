@@ -65,17 +65,17 @@ def manual_request(ssml_text):
         ]
     }
 
-    with open("JSON_copy_paste.txt", "w") as f:
+    with open("intermediates/JSON_copy_paste.txt", "w") as f:
         json.dump(data, f)
 
     input("Paste the response into JSON_copy_paste.txt and hit enter")
 
-    with open("JSON_copy_paste.txt", "r") as f:
+    with open("intermediates/JSON_copy_paste.txt", "r") as f:
         return json.load(f)
     
 def decode_audio(base64_audio):
     audio = base64.b64decode(base64_audio)
-    with open("voice.mp3", "wb") as out:
+    with open("intermediates/voice.mp3", "wb") as out:
         out.write(audio)
 
 def break_long_phrases(split_post):
@@ -106,7 +106,7 @@ def sec_to_hms(sec):
     return time.strftime("%H:%M:%S", time.gmtime(sec))
 
 def create_subtitles(split_post, times):
-    with open("subtitles.srt", "w") as f:
+    with open("intermediates/subtitles.srt", "w") as f:
         for i in range(len(split_post)):
             start = times[i]["timeSeconds"]
             end = times[i + 1]["timeSeconds"]
@@ -123,9 +123,7 @@ def get_file_length(filename):
 def print_error(string):
     print('\033[91m' + string + '\033[0m')
 
-post_text = '''
-Reddit post
-'''
+post_text = '''Reddit post'''
 
 post_text += "."
 post_text = post_text.replace("’", "'").replace("‘", "'")
@@ -140,11 +138,11 @@ ssml_text = post_to_ssml(split_post)
 # response = google_api_request(ssml_text)
 
 # Manual request
-response = manual_request(ssml_text)
+# response = manual_request(ssml_text)
 
 # Testing
-# with open("JSON_copy_paste.txt", "r") as f:
-#     response = json.load(f)
+with open("intermediates/JSON_copy_paste.txt", "r") as f:
+    response = json.load(f)
 
 #######################################################
 
@@ -153,16 +151,16 @@ if "error" in response:
     quit()
 
 bg_video_name = random.choice(["minecraft.mp4", "subway.mp4"])
-video_length = get_file_length(bg_video_name)
-audio_length = get_file_length("voice.mp3")
+video_length = get_file_length("background_videos/" + bg_video_name)
+audio_length = get_file_length("intermediates/voice.mp3")
 
 decode_audio(response["audioContent"])
 subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_length - audio_length - 1)))
-               + " -i " + bg_video_name + " -i voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest video_no_text.mp4")
+               + " -i background_videos/" + bg_video_name + " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4")
 
 times = response["timepoints"]
 create_subtitles(split_post, times)
 
-subprocess.run("ffmpeg -y -i video_no_text.mp4 -vf \"subtitles=subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy final.mov")
+subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov")
 
 # TODO: add reddit api integration
