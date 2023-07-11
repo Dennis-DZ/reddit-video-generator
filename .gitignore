@@ -163,3 +163,4 @@ cython_debug/
 background_videos/
 intermediates/
 result/
+praw.ini

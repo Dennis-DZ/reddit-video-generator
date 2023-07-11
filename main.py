@@ -5,13 +5,14 @@ import json
 import base64
 import subprocess
 import random
+import praw
 
 def post_to_ssml(split_post):
     ssml_text = ""
     i = 0
 
     for phrase in split_post:
-        ssml_text += "<mark name='" + str(i) + "'/>" + phrase.replace("/", " slash ").replace('"', "'")
+        ssml_text += "<mark name='" + str(i) + "'/>" + phrase.replace("/", " slash ")
         i += 1
 
     return "<speak>" + ssml_text + "<mark name='" + str(i) + "'/>" + "</speak>"
@@ -123,11 +124,17 @@ def get_file_length(filename):
 def print_error(string):
     print('\033[91m' + string + '\033[0m')
 
-post_text = '''Reddit post'''
+reddit = praw.Reddit("bot1")
 
-post_text += "."
-post_text = post_text.replace("’", "'").replace("‘", "'")
-split_post = re.findall(".+?[.,?!-]", post_text)
+for submission in reddit.subreddit("AmITheAsshole").hot(limit=5):
+    if not submission.stickied:
+        post_text = submission.title + " " + submission.selftext
+        break
+
+post_text += "." # Ensure text ends with punctuation so that the last phrase is captured
+post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unsupported quotation marks
+post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
+split_post = re.findall("[^.]+?[.,?!-]", post_text) # Split post into phrases followed by a punctuation mark
 break_long_phrases(split_post)
 
 ssml_text = post_to_ssml(split_post)
@@ -138,11 +145,11 @@ ssml_text = post_to_ssml(split_post)
 # response = google_api_request(ssml_text)
 
 # Manual request
-# response = manual_request(ssml_text)
+response = manual_request(ssml_text)
 
 # Testing
-with open("intermediates/JSON_copy_paste.txt", "r") as f:
-    response = json.load(f)
+# with open("intermediates/JSON_copy_paste.txt", "r") as f:
+#     response = json.load(f)
 
 #######################################################
 
@@ -162,5 +169,3 @@ times = response["timepoints"]
 create_subtitles(split_post, times)
 
 subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov")
-
-# TODO: add reddit api integration
