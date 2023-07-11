@@ -126,6 +126,7 @@ def print_error(string):
 
 reddit = praw.Reddit("bot1")
 
+# for submission in reddit.subreddit("AmITheAsshole").top(time_filter="month"):
 for submission in reddit.subreddit("AmITheAsshole").hot(limit=5):
     if not submission.stickied:
         post_text = submission.title + " " + submission.selftext
