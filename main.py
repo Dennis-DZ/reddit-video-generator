@@ -6,6 +6,8 @@ import base64
 import subprocess
 import random
 import praw
+from tiktok_uploader.upload import upload_videos
+from tiktok_uploader.auth import AuthBackend
 
 def post_to_ssml(split_post):
     ssml_text = ""
@@ -127,8 +129,8 @@ def print_error(string):
 reddit = praw.Reddit("bot1")
 
 # for submission in reddit.subreddit("AmITheAsshole").top(time_filter="month"):
-for submission in reddit.subreddit("AmITheAsshole").hot(limit=5):
-    if not submission.stickied:
+for submission in reddit.subreddit("AmITheAsshole").hot(limit=10):
+    if not submission.stickied and "http" not in submission.selftext:
         post_text = submission.title + " " + submission.selftext
         break
 
@@ -146,11 +148,11 @@ ssml_text = post_to_ssml(split_post)
 # response = google_api_request(ssml_text)
 
 # Manual request
-response = manual_request(ssml_text)
+# response = manual_request(ssml_text)
 
 # Testing
-# with open("intermediates/JSON_copy_paste.txt", "r") as f:
-#     response = json.load(f)
+with open("intermediates/JSON_copy_paste.txt", "r") as f:
+    response = json.load(f)
 
 #######################################################
 
@@ -170,3 +172,6 @@ times = response["timepoints"]
 create_subtitles(split_post, times)
 
 subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov")
+
+upload_videos([{"path": "result/final.mov", "description": "#reddit #reddittiktok #redditreading #redditposts #redditstories #fyp #xyzbca "}],
+              auth=AuthBackend(cookies="cookies.txt"), headless=False)
