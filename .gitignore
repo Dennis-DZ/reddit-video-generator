@@ -164,4 +164,4 @@ background_videos/
 intermediates/
 result/
 praw.ini
-cookies.txt
+private/
