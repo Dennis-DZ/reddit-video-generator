@@ -5,6 +5,7 @@ import base64
 import subprocess
 import random
 import praw
+import sqlite3
 from tiktok_uploader.upload import upload_videos
 from tiktok_uploader.auth import AuthBackend
 from google.cloud import texttospeech_v1beta1 as tts
@@ -20,7 +21,7 @@ def post_to_ssml(split_post):
     i = 0
 
     for phrase in split_post:
-        processed_phrase = phrase.replace("/", " slash ").replace("-", " ")
+        processed_phrase = phrase.replace("/", " slash ").replace("-", " ").replace("*", "")
         processed_phrase = re.sub("(?<=[0-9])\.(?=[0-9])", " point ", processed_phrase) # Replace decimal points in numbers with the word "point"
         ssml_text += "<mark name='" + str(i) + "'/>" + processed_phrase
         i += 1
@@ -116,15 +117,34 @@ def print_error(string):
     print('\033[91m' + string + '\033[0m')
 
 # Set program mode
-current_mode = Mode.TESTING
+current_mode = Mode.MANUAL
 
-# Obtain text from reddit post
+connection = sqlite3.connect("result/posts.sqlite")
+cursor = connection.cursor()
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS "Posts" (
+	"id"	INTEGER NOT NULL UNIQUE,
+	"name"	TEXT UNIQUE,
+	PRIMARY KEY("id" AUTOINCREMENT)
+);''')
+
+# Create Reddit instance
 reddit = praw.Reddit("bot1")
-# for submission in reddit.subreddit("AmITheAsshole").top(time_filter="month"):
-for submission in reddit.subreddit("AmITheAsshole").hot():
-    if not submission.stickied and "http" not in submission.selftext:
-        post_text = submission.title + " " + submission.selftext
-        break
+
+select_query = "SELECT * FROM Posts WHERE name = ?"
+
+# Loop over popular posts
+for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
+# for submission in reddit.subreddit("AmITheAsshole").hot():
+    post_id = submission.name
+    # Check that post has not already been used
+    if not cursor.execute(select_query, [post_id]).fetchall():
+        # Check that post is not sticked and doesn't contain a link
+        if not submission.stickied and "http" not in submission.selftext:
+            # Save post text
+            post_text = submission.title + " " + submission.selftext
+            break
 
 post_text = post_text.strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
 post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unsupported quotation marks
@@ -167,8 +187,15 @@ create_subtitles(split_post, times)
 
 subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov")
 
-upload_videos([{"path": "result/final.mov", "description": "#reddit #reddittiktok #redditreading #redditposts #redditstories #fyp #xyzbca "}],
+failed_videos = upload_videos([{"path": "result/final.mov", "description": "#reddit #reddittiktok #redditreading #redditposts #redditstories #fyp #xyzbca "}],
               auth=AuthBackend(cookies="private/cookies.txt"), headless=False)
 
-# TODO: add SQL database for storing video ids that have already been posted
+# If the video is successfully uploaded, add its id to the database
+if not failed_videos:
+    cursor.execute("INSERT INTO Posts (name) VALUES (?)", [post_id])
+
+cursor.close()
+connection.commit()
+connection.close()
+
 # TODO: set up raspberry pi to run this code every few hours as a test
