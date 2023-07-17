@@ -6,6 +6,7 @@ import subprocess
 import random
 import praw
 import sqlite3
+import os
 from tiktok_uploader.upload import upload_videos
 from tiktok_uploader.auth import AuthBackend
 from google.cloud import texttospeech_v1beta1 as tts
@@ -110,18 +111,22 @@ def get_file_length(filename):
                              "format=duration", "-of",
                              "default=noprint_wrappers=1:nokey=1", filename],
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
+        stderr=subprocess.STDOUT,
+        shell=True)
     return float(result.stdout)
-
-def print_error(string):
-    print('\033[91m' + string + '\033[0m')
 
 # Set program mode
 current_mode = Mode.MANUAL
 
+# Make result and intermediates folders if they don't exist
+os.makedirs("result", exist_ok=True)
+os.makedirs("intermediates", exist_ok=True)
+
+# Create/connect to database of already processed posts
 connection = sqlite3.connect("result/posts.sqlite")
 cursor = connection.cursor()
 
+# Create table in the database if it doesn't exist
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS "Posts" (
 	"id"	INTEGER NOT NULL UNIQUE,
@@ -132,6 +137,7 @@ CREATE TABLE IF NOT EXISTS "Posts" (
 # Create Reddit instance
 reddit = praw.Reddit("bot1")
 
+# Query for checking if a given post is in the database
 select_query = "SELECT * FROM Posts WHERE name = ?"
 
 # Loop over popular posts
@@ -152,50 +158,64 @@ post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with per
 split_post = re.findall("[^.]+?[.,?!][0-9]*", post_text) # Split post into phrases followed by a punctuation mark
 break_long_phrases(split_post)
 
+# Convert split-up post into ssml
 ssml_text = post_to_ssml(split_post)
 
 if current_mode == Mode.API:
 
+    # If in API mode, send ssml to google API and save response
     response = google_api_request(ssml_text)
+    # Save audio to file
     save_audio(response.audio_content)
+    # Convert response timepoints data structure to list of dictionaries
     times = []
     for timepoint in response.timepoints:
         times.append({"markName": timepoint.mark_name, "timeSeconds": timepoint.time_seconds})
 
+    # Write API response to file as JSON for debugging and testing
     with open("intermediates/JSON_copy_paste.txt", "w") as f:
         json.dump({"audioContent": base64.b64encode(response.audio_content).decode(), "timepoints": times}, f)
     
 else:
     
+    # If in manual mode, write JSON request to file and prompt response to be copied back in
     if current_mode == Mode.MANUAL:
-        response = manual_request(ssml_text)
+        manual_request(ssml_text)
 
+    # Read copied response from file
     with open("intermediates/JSON_copy_paste.txt", "r") as f:
         response = json.load(f)
     
+    # Decode and store audio and save timepoints
     save_audio(base64.b64decode(response["audioContent"]))
     times = response["timepoints"]
 
-bg_video_name = random.choice(["minecraft.mp4", "subway.mp4"])
+# Choose a random video to use from the background_videos folder
+bg_video_name = random.choice(os.listdir("background_videos"))
+# Get the lengths of the background video and TTS audio
 video_length = get_file_length("background_videos/" + bg_video_name)
 audio_length = get_file_length("intermediates/voice.mp3")
 
+# Combine TTS audio with random section of the background video
 subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_length - audio_length - 1)))
-               + " -i background_videos/" + bg_video_name + " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4")
+               + " -i background_videos/" + bg_video_name +
+               " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4", shell=True)
 
+# Generate srt file from timepoints
 create_subtitles(split_post, times)
 
-subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov")
+# Use ffmpeg subtitles filter to add text onto the video when it's spoken
+subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov", shell=True)
 
+# Upload the final video to TikTok, storing it into failed_videos if it doesn't upload
 failed_videos = upload_videos([{"path": "result/final.mov", "description": "#reddit #reddittiktok #redditreading #redditposts #redditstories #fyp #xyzbca "}],
-              auth=AuthBackend(cookies="private/cookies.txt"), headless=False)
+              auth=AuthBackend(cookies="private/cookies.txt"), headless=True)
 
 # If the video is successfully uploaded, add its id to the database
 if not failed_videos:
     cursor.execute("INSERT INTO Posts (name) VALUES (?)", [post_id])
 
+# Commit and close the database
 cursor.close()
 connection.commit()
 connection.close()
-
-# TODO: set up raspberry pi to run this code every few hours as a test
