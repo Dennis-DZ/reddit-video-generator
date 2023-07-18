@@ -100,8 +100,12 @@ def sec_to_hms(sec):
     return time.strftime("%H:%M:%S", time.gmtime(sec))
 
 def create_subtitles(split_post, times):
-    with open("intermediates/subtitles.srt", "w") as f:
+    with open("intermediates/subtitles.srt", "w", encoding="utf-8") as f:
         for i in range(len(split_post)):
+            if i + 1 >= len(times) or i != int(times[i]["markName"]):
+                print_error("***Error in timepoints from API response***")
+                cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 0))
+                save_and_quit()
             start = times[i]["timeSeconds"]
             end = times[i + 1]["timeSeconds"]
             f.write(str(i + 1) + "\n" + sec_to_hmsm(start) + " --> " + sec_to_hmsm(end) + "\n" + split_post[i].strip() + "\n\n")
@@ -115,8 +119,17 @@ def get_file_length(filename):
         shell=True)
     return float(result.stdout)
 
+def print_error(string):
+    print('\033[91m' + string + '\033[0m')
+
+def save_and_quit():
+    cursor.close()
+    connection.commit()
+    connection.close()
+    quit()
+
 # Set program mode
-current_mode = Mode.MANUAL
+current_mode = Mode.API
 
 # Make result and intermediates folders if they don't exist
 os.makedirs("result", exist_ok=True)
@@ -131,6 +144,7 @@ cursor.execute('''
 CREATE TABLE IF NOT EXISTS "Posts" (
 	"id"	INTEGER NOT NULL UNIQUE,
 	"name"	TEXT UNIQUE,
+	"uploaded"	INTEGER NOT NULL,
 	PRIMARY KEY("id" AUTOINCREMENT)
 );''')
 
@@ -155,7 +169,7 @@ for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
 post_text = post_text.strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
 post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unsupported quotation marks
 post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
-split_post = re.findall("[^.]+?[.,?!][0-9]*", post_text) # Split post into phrases followed by a punctuation mark
+split_post = re.findall("[^.]+?[.,?!][0-9!?)\"]*", post_text) # Split post into phrases followed by a punctuation mark
 break_long_phrases(split_post)
 
 # Convert split-up post into ssml
@@ -192,17 +206,18 @@ else:
 
 # Choose a random video to use from the background_videos folder
 bg_video_name = random.choice(os.listdir("background_videos"))
+
 # Get the lengths of the background video and TTS audio
 video_length = get_file_length("background_videos/" + bg_video_name)
 audio_length = get_file_length("intermediates/voice.mp3")
+
+# Generate srt file from timepoints
+create_subtitles(split_post, times)
 
 # Combine TTS audio with random section of the background video
 subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_length - audio_length - 1)))
                + " -i background_videos/" + bg_video_name +
                " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4", shell=True)
-
-# Generate srt file from timepoints
-create_subtitles(split_post, times)
 
 # Use ffmpeg subtitles filter to add text onto the video when it's spoken
 subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov", shell=True)
@@ -213,9 +228,7 @@ failed_videos = upload_videos([{"path": "result/final.mov", "description": "#red
 
 # If the video is successfully uploaded, add its id to the database
 if not failed_videos:
-    cursor.execute("INSERT INTO Posts (name) VALUES (?)", [post_id])
+    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 1))
 
 # Commit and close the database
-cursor.close()
-connection.commit()
-connection.close()
+save_and_quit()
