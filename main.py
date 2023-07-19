@@ -99,7 +99,7 @@ def sec_to_hmsm(sec):
 def sec_to_hms(sec):
     return time.strftime("%H:%M:%S", time.gmtime(sec))
 
-def create_subtitles(split_post, times):
+def create_subtitles(split_post, times, post_id):
     with open("intermediates/subtitles.srt", "w", encoding="utf-8") as f:
         for i in range(len(split_post)):
             if i + 1 >= len(times) or i != int(times[i]["markName"]):
@@ -157,16 +157,14 @@ select_query = "SELECT * FROM Posts WHERE name = ?"
 # Loop over popular posts
 # for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
 for submission in reddit.subreddit("AmITheAsshole").hot():
-    post_id = submission.name
     # Check that post has not already been used
-    if not cursor.execute(select_query, [post_id]).fetchall():
+    if not cursor.execute(select_query, [submission.name]).fetchall():
         # Check that post is not sticked and doesn't contain a link
         if not submission.stickied and "http" not in submission.selftext:
-            # Save post text
-            post_text = submission.title + " " + submission.selftext
+            # End loop with post saved in submission
             break
 
-post_text = post_text.strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
+post_text = (submission.title + " " + submission.selftext).strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
 post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unusual quotation marks
 post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
 split_post = re.findall("[^.]+?[.,?!][0-9!?)\"']*", post_text) # Split post into phrases followed by punctuation
@@ -214,11 +212,11 @@ audio_length = get_file_length("intermediates/voice.mp3")
 # End program if the video is too long to upload to TikTok
 if audio_length >= 180:
     print_error("***Video over 3 minutes***")
-    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 0))
+    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (submission.name, 0))
     save_and_quit()
 
 # Generate srt file from timepoints
-create_subtitles(split_post, times)
+create_subtitles(split_post, times, submission.name)
 
 # Combine TTS audio with random section of the background video
 subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_length - audio_length - 1)))
@@ -229,12 +227,13 @@ subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_lengt
 subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90'\" -c:a copy result/final.mov", shell=True)
 
 # Upload the final video to TikTok, storing it into failed_videos if it doesn't upload
-failed_videos = upload_videos([{"path": "result/final.mov", "description": "#reddit #reddittiktok #redditreading #redditposts #redditstories #fyp #xyzbca "}],
-              auth=AuthBackend(cookies="private/cookies.txt"), headless=True)
+failed_videos = upload_videos([{"path": "result/final.mov", "description": f"{submission.title}\nCredit: u/{submission.author.name}\n"
+                                + "#reddit #reddit_tiktok #redditreadings #redditposts #redditstories #fyp #xyzbca "}],
+                                auth=AuthBackend(cookies="private/cookies.txt"), headless=True)
 
 # If the video is successfully uploaded, add its id to the database
 if not failed_videos:
-    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 1))
+    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (submission.name, 1))
 
 # Commit and close the database
 save_and_quit()
