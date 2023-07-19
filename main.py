@@ -22,7 +22,7 @@ def post_to_ssml(split_post):
     i = 0
 
     for phrase in split_post:
-        processed_phrase = phrase.replace("/", " slash ").replace("-", " ").replace("*", "")
+        processed_phrase = phrase.replace("/", " slash ").replace("-", " ").replace("*", "").replace("&", " and ")
         processed_phrase = re.sub("(?<=[0-9])\.(?=[0-9])", " point ", processed_phrase) # Replace decimal points in numbers with the word "point"
         ssml_text += "<mark name='" + str(i) + "'/>" + processed_phrase
         i += 1
@@ -155,8 +155,8 @@ reddit = praw.Reddit("bot1")
 select_query = "SELECT * FROM Posts WHERE name = ?"
 
 # Loop over popular posts
-for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
-# for submission in reddit.subreddit("AmITheAsshole").hot():
+# for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
+for submission in reddit.subreddit("AmITheAsshole").hot():
     post_id = submission.name
     # Check that post has not already been used
     if not cursor.execute(select_query, [post_id]).fetchall():
@@ -167,9 +167,9 @@ for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
             break
 
 post_text = post_text.strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
-post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unsupported quotation marks
+post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unusual quotation marks
 post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
-split_post = re.findall("[^.]+?[.,?!][0-9!?)\"]*", post_text) # Split post into phrases followed by a punctuation mark
+split_post = re.findall("[^.]+?[.,?!][0-9!?)\"']*", post_text) # Split post into phrases followed by punctuation
 break_long_phrases(split_post)
 
 # Convert split-up post into ssml
@@ -211,6 +211,12 @@ bg_video_name = random.choice(os.listdir("background_videos"))
 video_length = get_file_length("background_videos/" + bg_video_name)
 audio_length = get_file_length("intermediates/voice.mp3")
 
+# End program if the video is too long to upload to TikTok
+if audio_length >= 180:
+    print_error("***Video over 3 minutes***")
+    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 0))
+    save_and_quit()
+
 # Generate srt file from timepoints
 create_subtitles(split_post, times)
 
@@ -220,7 +226,7 @@ subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_lengt
                " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4", shell=True)
 
 # Use ffmpeg subtitles filter to add text onto the video when it's spoken
-subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90:charenc=ISO8859-1'\" -c:a copy result/final.mov", shell=True)
+subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90'\" -c:a copy result/final.mov", shell=True)
 
 # Upload the final video to TikTok, storing it into failed_videos if it doesn't upload
 failed_videos = upload_videos([{"path": "result/final.mov", "description": "#reddit #reddittiktok #redditreading #redditposts #redditstories #fyp #xyzbca "}],
