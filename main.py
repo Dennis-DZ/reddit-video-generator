@@ -10,6 +10,7 @@ import os
 from tiktok_uploader.upload import upload_videos
 from tiktok_uploader.auth import AuthBackend
 from google.cloud import texttospeech_v1beta1 as tts
+import google.api_core.exceptions
 from enum import Enum
 
 class Mode(Enum):
@@ -103,9 +104,7 @@ def create_subtitles(split_post, times, post_id):
     with open("intermediates/subtitles.srt", "w", encoding="utf-8") as f:
         for i in range(len(split_post)):
             if i + 1 >= len(times) or i != int(times[i]["markName"]):
-                print_error("***Error in timepoints from API response***")
-                cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 0))
-                save_and_quit()
+                fatal_error("***Error in timepoints from API response***", post_id, save_post=True)
             start = times[i]["timeSeconds"]
             end = times[i + 1]["timeSeconds"]
             f.write(str(i + 1) + "\n" + sec_to_hmsm(start) + " --> " + sec_to_hmsm(end) + "\n" + split_post[i].strip() + "\n\n")
@@ -121,6 +120,19 @@ def get_file_length(filename):
 
 def print_error(string):
     print('\033[91m' + string + '\033[0m')
+
+def log(string):
+    with open("result/log.txt", "a") as f:
+        f.write(string + "\n")
+
+def fatal_error(message, post_id, save_post):
+    log(time.strftime("%m/%d/%Y %H:%M:%S", time.localtime()) + ":")
+    log(post_id + " was not posted")
+    log(message + "\n")
+    print_error(message)
+    if save_post:
+        cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 0))
+    save_and_quit()
 
 def save_and_quit():
     cursor.close()
@@ -175,8 +187,13 @@ ssml_text = post_to_ssml(split_post)
 
 if current_mode == Mode.API:
 
-    # If in API mode, send ssml to google API and save response
-    response = google_api_request(ssml_text)
+    # If in API mode, send ssml to google API and save response, logging exceptions if they occur
+    try:
+        response = google_api_request(ssml_text)
+    except google.api_core.exceptions.InvalidArgument:
+        fatal_error("***Input over 5000 bytes***", submission.name, save_post=True)
+    except Exception as exception:
+        fatal_error(f"***Problem with API request: {type(exception).__name__}***", submission.name, save_post=False)
     # Save audio to file
     save_audio(response.audio_content)
     # Convert response timepoints data structure to list of dictionaries
@@ -211,9 +228,7 @@ audio_length = get_file_length("intermediates/voice.mp3")
 
 # End program if the video is too long to upload to TikTok
 if audio_length >= 180:
-    print_error("***Video over 3 minutes***")
-    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (submission.name, 0))
-    save_and_quit()
+    fatal_error("***Video over 3 minutes***", submission.name, save_post=True)
 
 # Generate srt file from timepoints
 create_subtitles(split_post, times, submission.name)
@@ -234,6 +249,16 @@ failed_videos = upload_videos([{"path": "result/final.mov", "description": f"{su
 # If the video is successfully uploaded, add its id to the database
 if not failed_videos:
     cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (submission.name, 1))
+else:
+    # Otherwise, end the program
+    fatal_error("***Problem encountered while posting***", submission.name, save_post=False)
+
+# Log successful post
+log(time.strftime("%m/%d/%Y %H:%M:%S", time.localtime()) + ":")
+log(submission.name + " was successfully posted\n")
 
 # Commit and close the database
 save_and_quit()
+
+# TODO: Add a column to the database indicating whether the video was fully created
+# TODO: Use the data from the new column to attempt to upload the previously generated video if the upload failed the last time
