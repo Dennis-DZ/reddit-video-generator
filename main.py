@@ -104,7 +104,7 @@ def create_subtitles(split_post, times, post_id):
     with open("intermediates/subtitles.srt", "w", encoding="utf-8") as f:
         for i in range(len(split_post)):
             if i + 1 >= len(times) or i != int(times[i]["markName"]):
-                fatal_error("***Error in timepoints from API response***", post_id, save_post=True)
+                fatal_error("***Error in timepoints from API response***", post_id, processed=False)
             start = times[i]["timeSeconds"]
             end = times[i + 1]["timeSeconds"]
             f.write(str(i + 1) + "\n" + sec_to_hmsm(start) + " --> " + sec_to_hmsm(end) + "\n" + split_post[i].strip() + "\n\n")
@@ -125,13 +125,12 @@ def log(string):
     with open("result/log.txt", "a") as f:
         f.write(string + "\n")
 
-def fatal_error(message, post_id, save_post):
+def fatal_error(message, post_id, processed):
     log(time.strftime("%m/%d/%Y %H:%M:%S", time.localtime()) + ":")
     log(post_id + " was not posted")
     log(message + "\n")
     print_error(message)
-    if save_post:
-        cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (post_id, 0))
+    cursor.execute("INSERT OR REPLACE INTO Posts (name, processed, posted) VALUES (?, ?, ?)", (post_id, int(processed), 0))
     save_and_quit()
 
 def save_and_quit():
@@ -156,90 +155,98 @@ cursor.execute('''
 CREATE TABLE IF NOT EXISTS "Posts" (
 	"id"	INTEGER NOT NULL UNIQUE,
 	"name"	TEXT UNIQUE,
-	"uploaded"	INTEGER NOT NULL,
+	"processed"	INTEGER NOT NULL,
+    "posted"	INTEGER NOT NULL,
 	PRIMARY KEY("id" AUTOINCREMENT)
 );''')
+
+# Gets the most recently attempted post from the database
+most_recent = cursor.execute("SELECT name, processed, posted FROM Posts ORDER BY id DESC LIMIT 1").fetchone()
 
 # Create Reddit instance
 reddit = praw.Reddit("bot1")
 
-# Query for checking if a given post is in the database
-select_query = "SELECT * FROM Posts WHERE name = ?"
+if most_recent and most_recent[1] and not most_recent[2]:
+    # If the most recent post was fully processed into a video, but not posted,
+    # then the post is saved into submission
+    submission = reddit.submission(id=most_recent[0][3:])
 
-# Loop over popular posts
-# for submission in reddit.subreddit("AmITheAsshole").top(time_filter="year"):
-for submission in reddit.subreddit("AmITheAsshole").hot():
-    # Check that post has not already been used
-    if not cursor.execute(select_query, [submission.name]).fetchall():
-        # Check that post is not sticked and doesn't contain a link
-        if not submission.stickied and "http" not in submission.selftext:
-            # End loop with post saved in submission
-            break
-
-post_text = (submission.title + " " + submission.selftext).strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
-post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unusual quotation marks
-post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
-split_post = re.findall("[^.]+?[.,?!][0-9!?)\"']*", post_text) # Split post into phrases followed by punctuation
-break_long_phrases(split_post)
-
-# Convert split-up post into ssml
-ssml_text = post_to_ssml(split_post)
-
-if current_mode == Mode.API:
-
-    # If in API mode, send ssml to google API and save response, logging exceptions if they occur
-    try:
-        response = google_api_request(ssml_text)
-    except google.api_core.exceptions.InvalidArgument:
-        fatal_error("***Input over 5000 bytes***", submission.name, save_post=True)
-    except Exception as exception:
-        fatal_error(f"***Problem with API request: {type(exception).__name__}***", submission.name, save_post=False)
-    # Save audio to file
-    save_audio(response.audio_content)
-    # Convert response timepoints data structure to list of dictionaries
-    times = []
-    for timepoint in response.timepoints:
-        times.append({"markName": timepoint.mark_name, "timeSeconds": timepoint.time_seconds})
-
-    # Write API response to file as JSON for debugging and testing
-    with open("intermediates/JSON_copy_paste.txt", "w") as f:
-        json.dump({"audioContent": base64.b64encode(response.audio_content).decode(), "timepoints": times}, f)
-    
 else:
-    
-    # If in manual mode, write JSON request to file and prompt response to be copied back in
-    if current_mode == Mode.MANUAL:
-        manual_request(ssml_text)
+    # Otherwise, a new post is chosen and turned into a video
 
-    # Read copied response from file
-    with open("intermediates/JSON_copy_paste.txt", "r") as f:
-        response = json.load(f)
-    
-    # Decode and store audio and save timepoints
-    save_audio(base64.b64decode(response["audioContent"]))
-    times = response["timepoints"]
+    # Loop over popular posts
+    for submission in reddit.subreddit("AmITheAsshole").hot():
+        # Check that post has not already been used
+        if not cursor.execute("SELECT * FROM Posts WHERE name = ? LIMIT 1", [submission.name]).fetchone():
+            # Check that post is not sticked and doesn't contain a link
+            if not submission.stickied and "http" not in submission.selftext:
+                # End loop with post saved in submission
+                break
 
-# Choose a random video to use from the background_videos folder
-bg_video_name = random.choice(os.listdir("background_videos"))
+    post_text = (submission.title + ". " + submission.selftext).strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
+    post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unusual quotation marks
+    post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
+    split_post = re.findall("[^.]+?[.,?!][0-9!?)\"',]*", post_text) # Split post into phrases followed by punctuation
+    break_long_phrases(split_post)
 
-# Get the lengths of the background video and TTS audio
-video_length = get_file_length("background_videos/" + bg_video_name)
-audio_length = get_file_length("intermediates/voice.mp3")
+    # Convert split-up post into ssml
+    ssml_text = post_to_ssml(split_post)
 
-# End program if the video is too long to upload to TikTok
-if audio_length >= 180:
-    fatal_error("***Video over 3 minutes***", submission.name, save_post=True)
+    if current_mode == Mode.API:
 
-# Generate srt file from timepoints
-create_subtitles(split_post, times, submission.name)
+        # If in API mode, send ssml to google API and save response, logging exceptions if they occur
+        try:
+            response = google_api_request(ssml_text)
+        except google.api_core.exceptions.InvalidArgument:
+            fatal_error("***Input over 5000 bytes***", submission.name, processed=False)
+        except Exception as exception:
+            fatal_error(f"***Problem with API request: {type(exception).__name__}***", submission.name, processed=False)
+        # Save audio to file
+        save_audio(response.audio_content)
+        # Convert response timepoints data structure to list of dictionaries
+        times = []
+        for timepoint in response.timepoints:
+            times.append({"markName": timepoint.mark_name, "timeSeconds": timepoint.time_seconds})
 
-# Combine TTS audio with random section of the background video
-subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_length - audio_length - 1)))
-               + " -i background_videos/" + bg_video_name +
-               " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4", shell=True)
+        # Write API response to file as JSON for debugging and testing
+        with open("intermediates/JSON_copy_paste.txt", "w") as f:
+            json.dump({"audioContent": base64.b64encode(response.audio_content).decode(), "timepoints": times}, f)
+        
+    else:
+        
+        # If in manual mode, write JSON request to file and prompt response to be copied back in
+        if current_mode == Mode.MANUAL:
+            manual_request(ssml_text)
 
-# Use ffmpeg subtitles filter to add text onto the video when it's spoken
-subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90'\" -c:a copy result/final.mov", shell=True)
+        # Read copied response from file
+        with open("intermediates/JSON_copy_paste.txt", "r") as f:
+            response = json.load(f)
+        
+        # Decode and store audio and save timepoints
+        save_audio(base64.b64decode(response["audioContent"]))
+        times = response["timepoints"]
+
+    # Choose a random video to use from the background_videos folder
+    bg_video_name = random.choice(os.listdir("background_videos"))
+
+    # Get the lengths of the background video and TTS audio
+    video_length = get_file_length("background_videos/" + bg_video_name)
+    audio_length = get_file_length("intermediates/voice.mp3")
+
+    # End program if the video is too long to upload to TikTok
+    if audio_length >= 180:
+        fatal_error("***Video over 3 minutes***", submission.name, processed=False)
+
+    # Generate srt file from timepoints
+    create_subtitles(split_post, times, submission.name)
+
+    # Combine TTS audio with random section of the background video
+    subprocess.run("ffmpeg -y -ss " + sec_to_hms(random.randrange(0, int(video_length - audio_length - 1)))
+                + " -i background_videos/" + bg_video_name +
+                " -i intermediates/voice.mp3 -c copy -map 0:v:0 -map 1:a:0 -shortest intermediates/video_no_text.mp4", shell=True)
+
+    # Use ffmpeg subtitles filter to add text onto the video when it's spoken
+    subprocess.run("ffmpeg -y -i intermediates/video_no_text.mp4 -vf \"subtitles=intermediates/subtitles.srt:force_style='Fontname=Montserrat Black,Alignment=10,Shadow=1,MarginL=90,MarginR=90'\" -c:a copy result/final.mov", shell=True)
 
 # Upload the final video to TikTok, storing it into failed_videos if it doesn't upload
 failed_videos = upload_videos([{"path": "result/final.mov", "description": f"{submission.title}\nCredit: u/{submission.author.name}\n"
@@ -248,10 +255,10 @@ failed_videos = upload_videos([{"path": "result/final.mov", "description": f"{su
 
 # If the video is successfully uploaded, add its id to the database
 if not failed_videos:
-    cursor.execute("INSERT INTO Posts (name, uploaded) VALUES (?, ?)", (submission.name, 1))
+    cursor.execute("INSERT OR REPLACE INTO Posts (name, processed, posted) VALUES (?, 1, 1)", [submission.name])
 else:
     # Otherwise, end the program
-    fatal_error("***Problem encountered while posting***", submission.name, save_post=False)
+    fatal_error("***Problem encountered while posting***", submission.name, processed=True)
 
 # Log successful post
 log(time.strftime("%m/%d/%Y %H:%M:%S", time.localtime()) + ":")
@@ -259,6 +266,3 @@ log(submission.name + " was successfully posted\n")
 
 # Commit and close the database
 save_and_quit()
-
-# TODO: Add a column to the database indicating whether the video was fully created
-# TODO: Use the data from the new column to attempt to upload the previously generated video if the upload failed the last time
