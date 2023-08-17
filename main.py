@@ -23,7 +23,8 @@ def post_to_ssml(split_post):
     i = 0
 
     for phrase in split_post:
-        processed_phrase = phrase.replace("/", " slash ").replace("-", " ").replace("*", "").replace("&", " and ")
+        processed_phrase = re.sub("(?<=[$0-9])\s*-\s*(?=[$0-9])", " to ", phrase) # Replace dashes between two numbers with the word "to"
+        processed_phrase = processed_phrase.replace("/", " slash ").replace("-", " ").replace("*", "").replace("&", " and ")
         processed_phrase = re.sub("(?<=[0-9])\.(?=[0-9])", " point ", processed_phrase) # Replace decimal points in numbers with the word "point"
         ssml_text += "<mark name='" + str(i) + "'/>" + processed_phrase
         i += 1
@@ -185,6 +186,8 @@ else:
 
     post_text = (submission.title + ". " + submission.selftext).strip() + "." # Ensure text ends with punctuation so that the last phrase is captured
     post_text = post_text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"') # Swap out unusual quotation marks
+    post_text = post_text.replace("\\", "").replace("&#x200B;", "") # Remove backslashes and unusual line breaks
+    post_text = re.sub(":\s*\n", ": ", post_text) # Remove paragraph breaks after colons
     post_text = re.sub("\s*\n", ". ", post_text) # Replace paragraph breaks with periods
     split_post = re.findall("[^.]+?[.,?!][0-9!?)\"',]*", post_text) # Split post into phrases followed by punctuation
     break_long_phrases(split_post)
